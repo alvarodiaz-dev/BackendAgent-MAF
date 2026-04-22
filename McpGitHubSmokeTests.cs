@@ -232,6 +232,7 @@ namespace BasicAgent
 
             var startDirs = new[]
             {
+                GetProjectRootDirectory(),
                 Environment.CurrentDirectory,
                 Directory.GetCurrentDirectory(),
                 AppContext.BaseDirectory
@@ -256,6 +257,36 @@ namespace BasicAgent
             }
 
             return null;
+        }
+
+        private static string GetProjectRootDirectory()
+        {
+            var searchRoots = new[]
+            {
+                AppContext.BaseDirectory,
+                Environment.CurrentDirectory,
+                Directory.GetCurrentDirectory()
+            }
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+            foreach (var startDir in searchRoots)
+            {
+                var dir = new DirectoryInfo(startDir);
+                while (dir != null)
+                {
+                    if (File.Exists(Path.Combine(dir.FullName, "BasicAgent.csproj")) ||
+                        File.Exists(Path.Combine(dir.FullName, "BasicAgent.sln")))
+                    {
+                        return dir.FullName;
+                    }
+
+                    dir = dir.Parent;
+                }
+            }
+
+            return AppContext.BaseDirectory;
         }
     }
 }

@@ -110,7 +110,39 @@ namespace BasicAgent
         }
 
         static string ResolvePath(string path) =>
-            Path.IsPathRooted(path) ? path : Path.Combine(Environment.CurrentDirectory, path);
+            Path.IsPathRooted(path) ? path : Path.Combine(GetProjectRootDirectory(), path);
+
+        static string GetProjectRootDirectory()
+        {
+            var searchRoots = new[]
+            {
+                AppContext.BaseDirectory,
+                Environment.CurrentDirectory,
+                Directory.GetCurrentDirectory()
+            }
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+            foreach (var startDir in searchRoots)
+            {
+                var dir = new DirectoryInfo(startDir);
+                while (dir != null)
+                {
+                    var hasProjectFile = File.Exists(Path.Combine(dir.FullName, "BasicAgent.csproj"));
+                    var hasSolutionFile = File.Exists(Path.Combine(dir.FullName, "BasicAgent.sln"));
+
+                    if (hasProjectFile || hasSolutionFile)
+                    {
+                        return dir.FullName;
+                    }
+
+                    dir = dir.Parent;
+                }
+            }
+
+            return AppContext.BaseDirectory;
+        }
 
         // ── Main ─────────────────────────────────────────────────────────────
         static async Task Main(string[] args)
@@ -139,7 +171,7 @@ namespace BasicAgent
             };
 
             // -- Skills --
-            string skillsPath = Path.Combine(AppContext.BaseDirectory, "skills");
+            string skillsPath = Path.Combine(GetProjectRootDirectory(), "skills");
             var fileOptions = new AgentFileSkillsSourceOptions
             {
                 AllowedResourceExtensions = [".md", ".txt", ".yaml", ".json"],
@@ -310,7 +342,7 @@ namespace BasicAgent
 
             // ── Buscar la carpeta generada del microservicio ──
             Console.WriteLine("\n[Pipeline] Buscando directorio del microservicio generado...");
-            string baseDir = Environment.CurrentDirectory;
+            string baseDir = GetProjectRootDirectory();
             var projectDir = Directory.GetDirectories(baseDir, "ibkteam-smp-*-service", SearchOption.AllDirectories)
                                       .OrderByDescending(d => Directory.GetCreationTime(d))
                                       .FirstOrDefault();
@@ -464,7 +496,7 @@ namespace BasicAgent
 
         static async Task<string?> WaitForContractFileAsync(int maxRetries = 30, int delayMs = 2000)
         {
-            string baseDir = Environment.CurrentDirectory;
+            string baseDir = GetProjectRootDirectory();
             for (int i = 0; i < maxRetries; i++)
             {
                 var found = Directory
