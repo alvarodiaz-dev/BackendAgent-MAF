@@ -1,0 +1,65 @@
+# Build outputs
+bin/
+obj/
+out/
+publish/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider / JetBrains
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+*.nuspec
+project.assets.json
+project.nuget.cache
+
+# Test and coverage
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+
+# Logs
+*.log
+logs/
+
+# Generated files
+Generated/
+_ReSharper*/
+*.DotSettings.user
+
+# Local environment / secrets
+.env
+.env.*
+appsettings.Development.json
+secrets.json
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+#skills
+skills/
+
+#node
+node_modules/
+package-lock.json
+package.json
+
+
+BasicAgent.sln
