@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
+using BasicAgent.Infrastructure;
 using ModelContextProtocol.Client;
 using ModelContextProtocol;
 
@@ -16,11 +17,7 @@ namespace BasicAgent
         {
             Console.WriteLine("[MCP Test] Starting GitHub MCP smoke test...");
 
-            var token = Environment.GetEnvironmentVariable("GITHUB_PERSONAL_ACCESS_TOKEN");
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                token = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-            }
+            var token = EnvironmentVariables.GetGitHubToken();
             if (string.IsNullOrWhiteSpace(token))
             {
                 Console.WriteLine("[MCP Test] Missing env var: GITHUB_PERSONAL_ACCESS_TOKEN (or GITHUB_TOKEN)");
@@ -28,7 +25,7 @@ namespace BasicAgent
             }
 
             bool shouldCreateRepo = args.Any(a => string.Equals(a, "--create-repo", StringComparison.OrdinalIgnoreCase));
-            var githubMcpServerPath = ResolveGitHubMcpServerPath();
+            var githubMcpServerPath = McpServerPathResolver.ResolveGitHubServerPath();
             if (githubMcpServerPath == null)
             {
                 Console.WriteLine("[MCP Test] GitHub MCP server script not found. Run 'npm install' in project root.");
@@ -226,67 +223,5 @@ namespace BasicAgent
             }
         }
 
-        private static string? ResolveGitHubMcpServerPath()
-        {
-            const string relativeMcpPath = "node_modules\\@modelcontextprotocol\\server-github\\dist\\index.js";
-
-            var startDirs = new[]
-            {
-                GetProjectRootDirectory(),
-                Environment.CurrentDirectory,
-                Directory.GetCurrentDirectory(),
-                AppContext.BaseDirectory
-            }
-            .Where(d => !string.IsNullOrWhiteSpace(d))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-            foreach (var startDir in startDirs)
-            {
-                var dir = new DirectoryInfo(startDir);
-                while (dir != null)
-                {
-                    string candidate = Path.Combine(dir.FullName, relativeMcpPath);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-
-                    dir = dir.Parent;
-                }
-            }
-
-            return null;
-        }
-
-        private static string GetProjectRootDirectory()
-        {
-            var searchRoots = new[]
-            {
-                AppContext.BaseDirectory,
-                Environment.CurrentDirectory,
-                Directory.GetCurrentDirectory()
-            }
-            .Where(d => !string.IsNullOrWhiteSpace(d))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-            foreach (var startDir in searchRoots)
-            {
-                var dir = new DirectoryInfo(startDir);
-                while (dir != null)
-                {
-                    if (File.Exists(Path.Combine(dir.FullName, "BasicAgent.csproj")) ||
-                        File.Exists(Path.Combine(dir.FullName, "BasicAgent.sln")))
-                    {
-                        return dir.FullName;
-                    }
-
-                    dir = dir.Parent;
-                }
-            }
-
-            return AppContext.BaseDirectory;
-        }
     }
 }

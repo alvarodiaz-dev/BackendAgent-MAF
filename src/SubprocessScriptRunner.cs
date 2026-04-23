@@ -8,6 +8,9 @@ using System.Diagnostics;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
+namespace BasicAgent
+{
+
 /// <summary>
 /// Executes file-based skill scripts as local subprocesses.
 /// </summary>
@@ -135,4 +138,5 @@ internal static class SubprocessScriptRunner
     /// Models may return keys with or without leading dashes (e.g., "value" vs "--value").
     /// </summary>
     private static string NormalizeKey(string key) => "--" + key.TrimStart('-');
+}
 }

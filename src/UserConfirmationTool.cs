@@ -15,7 +15,7 @@ namespace BasicAgent
         /// This is called by skills that need human approval to proceed.
         /// </summary>
         [Description("Request user confirmation to proceed with a specific action or phase. Returns 'yes' if approved, 'no' if rejected.")]
-        public static async Task<string> RequestUserConfirmation(
+        public static Task<string> RequestUserConfirmation(
             [Description("The action or phase that requires confirmation")] string action,
             [Description("Optional detailed description of what will happen if confirmed")] string? details = null)
         {
@@ -42,12 +42,12 @@ namespace BasicAgent
                 if (input == "y")
                 {
                     Console.WriteLine("✓ Approved. Continuing execution...\n");
-                    return "yes";
+                    return Task.FromResult("yes");
                 }
                 else if (input == "n")
                 {
                     Console.WriteLine("✗ Rejected. Stopping execution.\n");
-                    return "no";
+                    return Task.FromResult("no");
                 }
                 else
                 {
@@ -60,7 +60,7 @@ namespace BasicAgent
         /// Requests user confirmation with a yes/no question.
         /// </summary>
         [Description("Ask user a yes/no question and return their response.")]
-        public static async Task<string> AskUserYesNo(
+        public static Task<string> AskUserYesNo(
             [Description("The question to ask the user")] string question)
         {
             Console.WriteLine("\n" + new string('─', 70));
@@ -78,12 +78,12 @@ namespace BasicAgent
                 if (input == "y")
                 {
                     Console.WriteLine("✓ Response: Yes\n");
-                    return "yes";
+                    return Task.FromResult("yes");
                 }
                 else if (input == "n")
                 {
                     Console.WriteLine("✓ Response: No\n");
-                    return "no";
+                    return Task.FromResult("no");
                 }
                 else
                 {
@@ -97,7 +97,7 @@ namespace BasicAgent
         /// Skills can use this to inform about important events.
         /// </summary>
         [Description("Display a notification message to the user.")]
-        public static async Task<string> NotifyUser(
+        public static Task<string> NotifyUser(
             [Description("The notification message to display")] string message,
             [Description("Type of notification: 'info', 'warning', or 'success'")] string notificationType = "info")
         {
@@ -109,7 +109,7 @@ namespace BasicAgent
             };
 
             Console.WriteLine($"\n[{prefix} {(notificationType ?? "info").ToUpper()}] {message}\n");
-            return "notified";
+            return Task.FromResult("notified");
         }
     }
 }
