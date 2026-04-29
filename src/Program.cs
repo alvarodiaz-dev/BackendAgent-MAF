@@ -41,11 +41,8 @@ namespace BasicAgent
                 "skills/ibk-smp-microservices" 
             };
             
-            // Sincronizacion dinamica y filtrada de skills
-            var syncPath = await SkillsSynchronizer.SyncAsync(requiredSkills);
-            
-            // Apuntamos a la subcarpeta 'skills' dentro del repo clonado
-            var skillsPath = System.IO.Path.Combine(syncPath, "skills");
+            // Sincronizacion dinamica y filtrada de skills directamente en la carpeta /skills de la raiz
+            var skillsPath = await SkillsSynchronizer.SyncAsync(requiredSkills);
             var skillsProvider = SkillsProviderFactory.Build(skillsPath);
             
             var githubMcp = await GitHubMcpBootstrapper.InitializeAsync();

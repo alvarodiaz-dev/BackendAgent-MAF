@@ -14,6 +14,7 @@ namespace BasicAgent.Infrastructure
         {
             var repoUrl = Environment.GetEnvironmentVariable("SKILLS_REPO_URL");
             var branch = Environment.GetEnvironmentVariable("SKILLS_REPO_BRANCH") ?? "main";
+            var token = EnvironmentVariables.GetGitHubToken();
 
             if (string.IsNullOrWhiteSpace(repoUrl))
             {
@@ -21,7 +22,13 @@ namespace BasicAgent.Infrastructure
                 return Path.Combine(ProjectPaths.GetProjectRootDirectory(), "skills");
             }
 
-            var targetPath = Path.Combine(Path.GetTempPath(), "gemini-agent-skills");
+            // Inyectar token en la URL si es HTTPS para evitar prompts de login
+            if (!string.IsNullOrWhiteSpace(token) && repoUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                repoUrl = repoUrl.Replace("https://", $"https://{token}@", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var targetPath = Path.Combine(ProjectPaths.GetProjectRootDirectory(), "skills");
             var skillsList = skillsToLoad?.ToList() ?? new List<string>();
 
             try
@@ -29,11 +36,20 @@ namespace BasicAgent.Infrastructure
                 if (!Directory.Exists(targetPath))
                 {
                     Directory.CreateDirectory(targetPath);
+                }
+
+                if (!Directory.Exists(Path.Combine(targetPath, ".git")))
+                {
                     Console.WriteLine($"[Skills] Inicializando descarga parcial (Sparse Checkout) en {targetPath}...");
                     
                     await ShellCommandTool.RunShellCommand("git init", targetPath);
                     await ShellCommandTool.RunShellCommand($"git remote add origin {repoUrl}", targetPath);
                     await ShellCommandTool.RunShellCommand("git config core.sparseCheckout true", targetPath);
+                }
+                else
+                {
+                    // Actualizar URL por si el token cambió o para asegurar que sea la correcta
+                    await ShellCommandTool.RunShellCommand($"git remote set-url origin {repoUrl}", targetPath);
                 }
 
                 // Actualizar la lista de carpetas a descargar

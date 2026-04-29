@@ -9,8 +9,31 @@ namespace BasicAgent.Infrastructure
     {
         private static readonly AsyncLocal<string?> ActiveRunDirectory = new();
 
-        public static string ResolvePath(string path) =>
-            Path.IsPathRooted(path) ? path : Path.Combine(GetBaseWorkingDirectory(), path);
+        public static string ResolvePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return GetBaseWorkingDirectory();
+
+            // Normalizar separadores y quitar prefijos comunes que los modelos suelen alucinar
+            string normalized = path.Replace("\\", "/").Trim();
+            
+            // Lista de prefijos a ignorar si el modelo intenta usarlos como raíz
+            string[] prefixesToRemove = { "/workspace/", "workspace/", "/app/", "app/", "/src/", "/output/" };
+            foreach (var prefix in prefixesToRemove)
+            {
+                if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    normalized = normalized.Substring(prefix.Length);
+                    break;
+                }
+            }
+
+            // Quitar slashes iniciales para asegurar que Path.Combine lo trate como relativo
+            normalized = normalized.TrimStart('/');
+
+            // Siempre forzar que sea relativo al directorio base activo
+            // Esto evita que el agente escriba en C:\ o fuera del proyecto
+            return Path.GetFullPath(Path.Combine(GetBaseWorkingDirectory(), normalized));
+        }
 
         public static string GetBaseWorkingDirectory() =>
             string.IsNullOrWhiteSpace(ActiveRunDirectory.Value)

@@ -28,7 +28,11 @@ namespace BasicAgent.Infrastructure
                 || msg.Contains("timed out", StringComparison.OrdinalIgnoreCase)
                 || msg.Contains("timeout", StringComparison.OrdinalIgnoreCase)
                 || msg.Contains("connection", StringComparison.OrdinalIgnoreCase)
-                || msg.Contains("temporarily", StringComparison.OrdinalIgnoreCase);
+                || msg.Contains("temporarily", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("overloaded", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("quota", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("socket", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

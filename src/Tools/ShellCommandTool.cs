@@ -33,6 +33,10 @@ namespace BasicAgent.Tools
                     CreateNoWindow = true
                 };
 
+                // Deshabilitar prompts interactivos (como los de VS Code o Git Credential Manager)
+                processInfo.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+                processInfo.EnvironmentVariables["GIT_ASKPASS"] = "";
+
                 using var process = Process.Start(processInfo);
                 if (process == null)
                 {
