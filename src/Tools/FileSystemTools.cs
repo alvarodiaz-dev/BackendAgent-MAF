@@ -50,5 +50,24 @@ namespace BasicAgent.Tools
             Console.WriteLine($"[Tool Executed] ReadFile -> {fullPath}");
             return File.ReadAllText(fullPath);
         }
+
+        [Description("List all files in a directory recursively.")]
+        public static string GetDirectoryStructure(
+            [Description("The path to the directory to explore.")]
+            string path)
+        {
+            string fullPath = ProjectPaths.ResolvePath(path);
+            if (!Directory.Exists(fullPath))
+            {
+                return "Error: Directory not found.";
+            }
+
+            var files = Directory.GetFiles(fullPath, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(fullPath, f))
+                .ToList();
+
+            Console.WriteLine($"[Tool Executed] GetDirectoryStructure -> {fullPath} ({files.Count} files)");
+            return string.Join("\n", files);
+        }
     }
 }

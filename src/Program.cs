@@ -196,6 +196,7 @@ namespace BasicAgent
                 AIFunctionFactory.Create(FileSystemTools.WriteFile),
                 AIFunctionFactory.Create(FileSystemTools.CreateDirectory),
                 AIFunctionFactory.Create(FileSystemTools.ReadFile),
+                AIFunctionFactory.Create(FileSystemTools.GetDirectoryStructure),
                 AIFunctionFactory.Create(ShellCommandTool.RunShellCommand),
                 AIFunctionFactory.Create(UserConfirmationTool.RequestUserConfirmation),
                 AIFunctionFactory.Create(UserConfirmationTool.AskUserYesNo),

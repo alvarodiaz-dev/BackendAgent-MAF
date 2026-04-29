@@ -15,11 +15,10 @@ namespace BasicAgent.Services
             var fileOptions = new AgentFileSkillsSourceOptions
             {
                 AllowedResourceExtensions = [".md", ".txt", ".yaml", ".json"],
-                ResourceDirectories = ["references", "templates", "examples", "guides", "scripts", "resources"],
                 AllowedScriptExtensions = [".py", ".ps1", ".sh", ".cmd"]
             };
 
-            Console.WriteLine($"[Skills] Resource directories: {string.Join(", ", fileOptions.ResourceDirectories)}");
+            Console.WriteLine($"[Skills] Resource directories: {string.Join(", ", fileOptions.ResourceDirectories ?? Array.Empty<string>())}");
             Console.WriteLine($"[Skills] Allowed script extensions: {string.Join(", ", fileOptions.AllowedScriptExtensions)}");
 
             return new AgentSkillsProviderBuilder()
@@ -42,20 +41,20 @@ namespace BasicAgent.Services
         {
             if (!Directory.Exists(skillsPath))
             {
-                Console.WriteLine("[Skills] Directory not found.");
+                Console.WriteLine("[Skills] Directory not found (fallback to local if available).");
                 return;
             }
 
-            foreach (string dir in Directory.GetDirectories(skillsPath).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                Console.WriteLine($"[Skills] Skill folder: {Path.GetFileName(dir)}");
+            var skillFolders = Directory.GetDirectories(skillsPath)
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrEmpty(name) && !name.StartsWith('.'))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
-                foreach (string file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
-                             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-                {
-                    string relative = Path.GetRelativePath(skillsPath, file);
-                    Console.WriteLine($"[Skills]   - {relative}");
-                }
+            foreach (var name in skillFolders)
+            {
+                var fileCount = Directory.GetFiles(Path.Combine(skillsPath, name!), "*", SearchOption.AllDirectories).Length;
+                Console.WriteLine($"[Skills] OK Skill detectada: {name} ({fileCount} archivos)");
             }
         }
     }

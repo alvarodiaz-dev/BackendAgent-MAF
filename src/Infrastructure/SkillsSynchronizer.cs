@@ -14,7 +14,6 @@ namespace BasicAgent.Infrastructure
         {
             var repoUrl = Environment.GetEnvironmentVariable("SKILLS_REPO_URL");
             var branch = Environment.GetEnvironmentVariable("SKILLS_REPO_BRANCH") ?? "main";
-            var token = EnvironmentVariables.GetGitHubToken();
 
             if (string.IsNullOrWhiteSpace(repoUrl))
             {
@@ -22,54 +21,42 @@ namespace BasicAgent.Infrastructure
                 return Path.Combine(ProjectPaths.GetProjectRootDirectory(), "skills");
             }
 
-            // Inyectar token en la URL si es HTTPS para evitar prompts de login
-            if (!string.IsNullOrWhiteSpace(token) && repoUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            {
-                repoUrl = repoUrl.Replace("https://", $"https://{token}@", StringComparison.OrdinalIgnoreCase);
-            }
-
-            var targetPath = Path.Combine(ProjectPaths.GetProjectRootDirectory(), "skills");
+            var syncRoot = Path.Combine(ProjectPaths.GetProjectRootDirectory(), ".skills-sync");
             var skillsList = skillsToLoad?.ToList() ?? new List<string>();
 
             try
             {
-                if (!Directory.Exists(targetPath))
+                if (!Directory.Exists(syncRoot))
                 {
-                    Directory.CreateDirectory(targetPath);
+                    Directory.CreateDirectory(syncRoot);
                 }
 
-                if (!Directory.Exists(Path.Combine(targetPath, ".git")))
+                if (!Directory.Exists(Path.Combine(syncRoot, ".git")))
                 {
-                    Console.WriteLine($"[Skills] Inicializando descarga parcial (Sparse Checkout) en {targetPath}...");
+                    Console.WriteLine($"[Skills] Inicializando repositorio de skills en {syncRoot}...");
                     
-                    await ShellCommandTool.RunShellCommand("git init", targetPath);
-                    await ShellCommandTool.RunShellCommand($"git remote add origin {repoUrl}", targetPath);
-                    await ShellCommandTool.RunShellCommand("git config core.sparseCheckout true", targetPath);
-                }
-                else
-                {
-                    // Actualizar URL por si el token cambió o para asegurar que sea la correcta
-                    await ShellCommandTool.RunShellCommand($"git remote set-url origin {repoUrl}", targetPath);
+                    await ShellCommandTool.RunShellCommand("git init", syncRoot);
+                    await ShellCommandTool.RunShellCommand($"git remote add origin {repoUrl}", syncRoot);
+                    await ShellCommandTool.RunShellCommand("git config core.sparseCheckout true", syncRoot);
                 }
 
                 // Actualizar la lista de carpetas a descargar
                 if (skillsList.Any())
                 {
-                    string sparsePath = Path.Combine(targetPath, ".git", "info", "sparse-checkout");
-                    // Escribimos las carpetas que queremos descargar (una por linea)
+                    string sparsePath = Path.Combine(syncRoot, ".git", "info", "sparse-checkout");
                     await File.WriteAllLinesAsync(sparsePath, skillsList);
-                    Console.WriteLine($"[Skills] Configurando filtros: {string.Join(", ", skillsList)}");
+                    Console.WriteLine($"[Skills] Filtros: {string.Join(", ", skillsList)}");
                 }
 
-                Console.WriteLine($"[Skills] Sincronizando desde rama {branch}...");
-                // Pull solo de las carpetas filtradas
-                await ShellCommandTool.RunShellCommand($"git pull origin {branch}", targetPath);
+                Console.WriteLine($"[Skills] Sincronizando rama {branch}...");
+                await ShellCommandTool.RunShellCommand($"git pull origin {branch}", syncRoot);
 
-                return targetPath;
+                // Devolvemos la subcarpeta 'skills' dentro del repo sincronizado
+                return Path.Combine(syncRoot, "skills");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Warning] Error al sincronizar skills: {ex.Message}. Usando fallback local.");
+                Console.WriteLine($"[Warning] Error al sincronizar: {ex.Message}. Usando fallback local.");
                 return Path.Combine(ProjectPaths.GetProjectRootDirectory(), "skills");
             }
         }

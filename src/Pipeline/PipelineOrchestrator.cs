@@ -117,16 +117,9 @@ namespace BasicAgent.Pipeline
                 interaction.UpdatePhase("fase-3-github");
                 interaction.Log("[Pipeline] > FASE 3 - Iniciando GitHub Sub-agent");
                 var ghSession = await _githubAgent.CreateSessionAsync();
-                
-                var ghToken = EnvironmentVariables.GetGitHubToken();
-                var authNote = !string.IsNullOrWhiteSpace(ghToken) 
-                    ? $"AUTHENTICATION: Use this token for git operations if needed: {ghToken}. When adding remote origin, use: https://{ghToken}@github.com/USER/REPO.git"
-                    : "AUTHENTICATION: No token provided, assuming environment is already authenticated.";
-
                 var ghPrompt = $"""
                     Project Name: {projectName}
                     Local Path: {projectDir}
-                    {authNote}
                     
                     Publish this project to GitHub now.
                     """;
