@@ -33,8 +33,21 @@ namespace BasicAgent
 
             IChatClient chatClient = await ChatClientFactory.BuildAsync();
             var baseTools = BuildBaseTools();
-            var skillsPath = System.IO.Path.Combine(ProjectPaths.GetProjectRootDirectory(), "skills");
+            
+            // Definimos las rutas relativas dentro del repositorio ibk-agentic-platform
+            var requiredSkills = new[] 
+            { 
+                "skills/ibk-architecture-documentation", 
+                "skills/ibk-smp-microservices" 
+            };
+            
+            // Sincronizacion dinamica y filtrada de skills
+            var syncPath = await SkillsSynchronizer.SyncAsync(requiredSkills);
+            
+            // Apuntamos a la subcarpeta 'skills' dentro del repo clonado
+            var skillsPath = System.IO.Path.Combine(syncPath, "skills");
             var skillsProvider = SkillsProviderFactory.Build(skillsPath);
+            
             var githubMcp = await GitHubMcpBootstrapper.InitializeAsync();
 
             AIAgent docAgent = AgentFactory.Build(

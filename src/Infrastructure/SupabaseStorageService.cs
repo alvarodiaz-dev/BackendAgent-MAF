@@ -15,12 +15,16 @@ namespace BasicAgent.Infrastructure
         {
             try
             {
-                var supabaseUrl = Environment.GetEnvironmentVariable("SUPABASE_URL");
+                var supabaseUrl = Environment.GetEnvironmentVariable("SUPABASE_URL") 
+                                 ?? Environment.GetEnvironmentVariable("NEXT_PUBLIC_SUPABASE_URL");
+                
                 var supabaseKey = Environment.GetEnvironmentVariable("SUPABASE_SERVICE_ROLE_KEY") 
-                                 ?? Environment.GetEnvironmentVariable("SUPABASE_KEY");
+                                 ?? Environment.GetEnvironmentVariable("SUPABASE_KEY")
+                                 ?? Environment.GetEnvironmentVariable("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
 
                 if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey))
                 {
+                    Console.WriteLine("[Storage] Error: No se encontraron las credenciales de Supabase (URL/KEY).");
                     return null;
                 }
 
