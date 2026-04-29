@@ -42,7 +42,7 @@ namespace BasicAgent.Tools
                 var outputTask = process.StandardOutput.ReadToEndAsync();
                 var errorTask = process.StandardError.ReadToEndAsync();
 
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(300));
                 try
                 {
                     await process.WaitForExitAsync(cts.Token);
@@ -50,7 +50,7 @@ namespace BasicAgent.Tools
                 catch (OperationCanceledException)
                 {
                     process.Kill(entireProcessTree: true);
-                    return $"Error: Command timed out after 30 seconds. Command was probably waiting for user input: {command}";
+                    return $"Error: Command timed out after 300 seconds. Command was probably waiting for user input or taking too long (e.g., maven build or heavy network): {command}";
                 }
 
                 string output = await outputTask;

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -75,11 +76,28 @@ namespace BasicAgent.Services
                 return "no-prompt";
             }
 
-            var normalized = new string(text
-                .Trim()
-                .ToLowerInvariant()
-                .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
-                .ToArray());
+            var decomposed = text.Trim().ToLowerInvariant().Normalize(NormalizationForm.FormD);
+            var builder = new StringBuilder(decomposed.Length);
+
+            foreach (char ch in decomposed)
+            {
+                var category = CharUnicodeInfo.GetUnicodeCategory(ch);
+                if (category == UnicodeCategory.NonSpacingMark)
+                {
+                    continue;
+                }
+
+                if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
+                {
+                    builder.Append(ch);
+                }
+                else
+                {
+                    builder.Append('-');
+                }
+            }
+
+            var normalized = builder.ToString();
 
             while (normalized.Contains("--", StringComparison.Ordinal))
             {

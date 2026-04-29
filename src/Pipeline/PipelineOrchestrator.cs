@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using BasicAgent.Infrastructure;
+using BasicAgent.Models;
 using BasicAgent.Services;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -27,15 +28,19 @@ namespace BasicAgent.Pipeline
             _githubMcpReady = githubMcpReady;
         }
 
-        public async Task RunAsync(string userInput)
+        public async Task<bool> RunAsync(string userInput, IPipelineInteraction interaction, PipelineRunContext? existingRunContext = null)
         {
-            var runContext = RunOutputFactory.Create(userInput);
-            Console.WriteLine($"\n[Pipeline] Run creado: {runContext.RunId}");
-            Console.WriteLine($"[Pipeline] Output de esta ejecucion: {runContext.RunDirectory}");
+            var runContext = existingRunContext ?? RunOutputFactory.Create(userInput);
+            interaction.Log($"[Pipeline] Run creado: {runContext.RunId}");
+            interaction.Log($"[Pipeline] Output de esta ejecucion: {runContext.RunDirectory}");
 
             using (ProjectPaths.UseRunDirectory(runContext.RunDirectory))
+            using (PipelineInteractionContext.Use(interaction))
             {
-                Console.WriteLine("\n[Pipeline] > FASE 1 - Iniciando DocumentationAgent");
+                // FASE 1: Documentation
+                interaction.UpdatePhase("fase-1-documentation");
+                interaction.Log("[Pipeline] > FASE 1 - Iniciando DocumentationAgent");
+                
                 var docSession = await _docAgent.CreateSessionAsync();
                 var docPrompt = $"""
                     Please execute the 'ibk-architecture-documentation' skill to generate the architecture documentation based on this request: {userInput}
@@ -44,27 +49,54 @@ namespace BasicAgent.Pipeline
                     - Save all generated files for this run under the current execution folder.
                     - Use relative paths only.
                     - Ensure '06-API-CONTRACTS.md' is generated under '_bmad-output/documentation' for this run.
+                    - Do NOT stop until ALL artifacts (01 to 07) are generated.
                     """;
 
-                bool docOk = await StreamAgentAsync(_docAgent, docSession, new ChatMessage(ChatRole.User, docPrompt));
-                if (!docOk)
+                string? contractPath = null;
+                int docRetries = 0;
+                var docMessages = new List<ChatMessage> { new ChatMessage(ChatRole.User, docPrompt) };
+
+                while (docRetries < 3)
                 {
-                    Console.WriteLine("[Pipeline] X FASE 1 fallo. Abortando pipeline.");
-                    return;
+                    bool docOk = await StreamAgentAsync(_docAgent, docSession, docMessages, interaction);
+                    if (!docOk)
+                    {
+                        interaction.Log("[Pipeline] X FASE 1 fallo durante la ejecucion del agente.");
+                        return false;
+                    }
+
+                    interaction.Log("[Pipeline] Verificando integridad de la documentacion...");
+                    contractPath = await WaitForContractFileAsync(runContext.RunDirectory, interaction, maxRetries: 5, delayMs: 2000);
+                    
+                    if (contractPath != null) 
+                    {
+                        // Validar que el archivo no esté vacío o sea demasiado corto (ej: solo un encabezado)
+                        var info = new FileInfo(contractPath);
+                        if (info.Length > 500) // Un contrato OpenAPI minimo suele tener mas de 500 bytes
+                        {
+                            break; 
+                        }
+                        interaction.Log("[Pipeline] ! El contrato parece estar incompleto (archivo muy pequeño).");
+                    }
+
+                    docRetries++;
+                    interaction.Log($"[Pipeline] [Reintento {docRetries}/3] Documentacion incompleta. Solicitando continuacion tecnica...");
+                    docMessages.Add(new ChatMessage(ChatRole.User, "STILL MISSING: '06-API-CONTRACTS.md'. Continue generating the remaining artifacts now. DO NOT repeat your introduction, language detection, or plan. Just generate the missing files."));
                 }
 
-                Console.WriteLine("\n[Pipeline] Buscando archivo 06-API-CONTRACTS.md...");
-                string? contractPath = await WaitForContractFileAsync(runContext.RunDirectory, maxRetries: 30, delayMs: 2000);
                 if (contractPath == null)
                 {
-                    Console.WriteLine("[Pipeline] X Error: No se encontro el contrato. Abortando pipeline.");
-                    return;
+                    interaction.Log("[Pipeline] X Error: No se encontro el contrato despues de varios intentos. Abortando pipeline.");
+                    return false;
                 }
 
-                Console.WriteLine($"[Pipeline] OK Contrato detectado: {contractPath}");
+                interaction.Log($"[Pipeline] OK Contrato detectado: {contractPath}");
                 string contractContent = await File.ReadAllTextAsync(contractPath);
 
-                Console.WriteLine("\n[Pipeline] > FASE 2 - Iniciando MicroservicesAgent");
+                // FASE 2: Microservices
+                interaction.UpdatePhase("fase-2-microservices");
+                interaction.Log("[Pipeline] > FASE 2 - Iniciando MicroservicesAgent");
+                
                 var msSession = await _msAgent.CreateSessionAsync();
                 var msPrompt = $"""
                     FASE 1 COMPLETADA. INICIANDO FASE 2 AUTOMATICAMENTE.
@@ -81,36 +113,47 @@ namespace BasicAgent.Pipeline
                     {contractContent}
                     """;
 
-                bool msOk = await StreamAgentAsync(_msAgent, msSession, new ChatMessage(ChatRole.User, msPrompt));
+                var msMessages = new List<ChatMessage> { new ChatMessage(ChatRole.User, msPrompt) };
+                bool msOk = await StreamAgentAsync(_msAgent, msSession, msMessages, interaction);
                 if (!msOk)
                 {
-                    Console.WriteLine("[Pipeline] X FASE 2 fallo. Abortando pipeline.");
-                    return;
+                    interaction.Log("[Pipeline] X FASE 2 fallo. Abortando pipeline.");
+                    return false;
                 }
 
-                Console.WriteLine("\n[Pipeline] Buscando directorio del microservicio generado...");
+                interaction.Log("[Pipeline] Buscando directorio del microservicio generado...");
                 string baseDir = runContext.RunDirectory;
-                var projectDir = Directory.GetDirectories(baseDir, "ibkteam-smp-*-service", SearchOption.AllDirectories)
+                string? projectDir = null;
+                
+                // Intentar encontrar el directorio por patron
+                for (int i = 0; i < 5; i++)
+                {
+                    projectDir = Directory.GetDirectories(baseDir, "ibkteam-smp-*-service", SearchOption.AllDirectories)
                                           .OrderByDescending(Directory.GetCreationTime)
                                           .FirstOrDefault();
+                    if (projectDir != null) break;
+                    await Task.Delay(2000);
+                }
 
                 if (projectDir == null)
                 {
-                    Console.WriteLine("[Pipeline] X Error: No se encontro el proyecto de codigo. Abortando publicacion.");
-                    return;
+                    interaction.Log("[Pipeline] X Error: No se encontro el proyecto de codigo. Revisa si la skill genero el microservicio.");
+                    return false;
                 }
 
                 string projectName = Path.GetFileName(projectDir);
-                Console.WriteLine($"[Pipeline] OK Proyecto detectado: {projectName} en {projectDir}");
+                interaction.Log($"[Pipeline] OK Proyecto detectado: {projectName} en {projectDir}");
 
+                // FASE 3: GitHub (Si esta listo)
                 if (!_githubMcpReady)
                 {
-                    Console.WriteLine("[Pipeline] X GitHub MCP no esta disponible. Se omite FASE 3 para evitar publicacion incompleta.");
-                    Console.WriteLine("[Pipeline] Finalizo hasta FASE 2. Revisa token/ruta MCP e intentalo nuevamente.");
-                    return;
+                    interaction.Log("[Pipeline] ! GitHub MCP no esta disponible. Finalizando ejecucion sin publicacion remota.");
+                    interaction.Log("[Pipeline] Los archivos locales estan disponibles en: " + runContext.RunDirectory);
+                    return true;
                 }
 
-                Console.WriteLine("\n[Pipeline] > FASE 3 - Iniciando GithubAgent");
+                interaction.UpdatePhase("fase-3-github");
+                interaction.Log("[Pipeline] > FASE 3 - Iniciando GithubAgent");
                 var ghSession = await _githubAgent.CreateSessionAsync();
                 var ghPrompt = $"""
                     FASE 2 COMPLETADA. INICIANDO PUBLICACION A GITHUB.
@@ -124,27 +167,55 @@ namespace BasicAgent.Pipeline
                     3. Conecta el remoto y haz push del codigo.
                     """;
 
-                bool ghOk = await StreamAgentAsync(_githubAgent, ghSession, new ChatMessage(ChatRole.User, ghPrompt));
+                var ghMessages = new List<ChatMessage> { new ChatMessage(ChatRole.User, ghPrompt) };
+                bool ghOk = await StreamAgentAsync(_githubAgent, ghSession, ghMessages, interaction);
                 if (!ghOk)
                 {
-                    Console.WriteLine("[Pipeline] X FASE 3 fallo. Revisa logs y vuelve a intentar.");
-                    return;
+                    interaction.Log("[Pipeline] X FASE 3 fallo. Revisa logs y vuelve a intentar.");
+                    return false;
                 }
 
-                Console.WriteLine("\n[Pipeline] PIPELINE COMPLETADO EXITOSAMENTE");
+                interaction.UpdatePhase("done");
+                interaction.Log("[Pipeline] PIPELINE COMPLETADO EXITOSAMENTE");
+
+                // Persistencia en Supabase Storage (ZIP)
+                try
+                {
+                    interaction.Log("[Pipeline] Generando backup de la sesion (.zip)...");
+                    string zipPath = Path.Combine(Path.GetTempPath(), $"{runContext.RunId}.zip");
+                    if (File.Exists(zipPath)) File.Delete(zipPath);
+
+                    System.IO.Compression.ZipFile.CreateFromDirectory(runContext.RunDirectory, zipPath);
+                    
+                    interaction.Log("[Pipeline] Subiendo backup a Supabase Storage...");
+                    string? storageUrl = await SupabaseStorageService.UploadZipAsync(zipPath, runContext.RunId);
+                    
+                    if (storageUrl != null)
+                    {
+                        interaction.Log($"[Pipeline] OK Backup disponible en: {storageUrl}");
+                    }
+                    
+                    // Limpieza del zip temporal local
+                    if (File.Exists(zipPath)) File.Delete(zipPath);
+                }
+                catch (Exception ex)
+                {
+                    interaction.Log($"[Warning] No se pudo crear o subir el backup: {ex.Message}");
+                }
+
+                return true;
             }
         }
 
-        private static async Task<bool> StreamAgentAsync(AIAgent agent, AgentSession session, ChatMessage message)
+        private static async Task<bool> StreamAgentAsync(AIAgent agent, AgentSession session, List<ChatMessage> messages, IPipelineInteraction interaction)
         {
-            var messages = new List<ChatMessage> { message };
             int transientRetryCount = 0;
 
             while (true)
             {
                 try
                 {
-                    Console.WriteLine("Procesando...\n");
+                    interaction.Log("Procesando...");
                     var accumulatedResponse = new StringBuilder();
 
                     await foreach (var update in agent.RunStreamingAsync(messages, session))
@@ -157,35 +228,53 @@ namespace BasicAgent.Pipeline
                     }
 
                     Console.WriteLine();
-                    string response = accumulatedResponse.ToString().ToLowerInvariant();
-                    bool needsConfirmation = ContainsConfirmationRequest(response);
+                    string fullResponse = accumulatedResponse.ToString();
+                    
+                    // No llamamos a interaction.Log(fullResponse) aquí para evitar duplicar en consola,
+                    // ya que el texto fue impreso carácter a carácter por Console.Write(update.Text).
+                    // Sin embargo, para que el estado de la API tenga el log completo, 
+                    // simplemente mantenemos el mensaje en el historial del agente.
+
+                    string responseLower = fullResponse.ToLowerInvariant();
+                    bool needsConfirmation = ContainsConfirmationRequest(responseLower);
 
                     if (needsConfirmation)
                     {
-                        Console.WriteLine("\n[Pipeline] La skill esta pidiendo confirmacion para continuar.");
-                        Console.Write("[Pipeline] Deseas continuar? (s/n): ");
-
-                        string? userResponse = Console.ReadLine();
+                        interaction.Log("[Pipeline] La skill esta pidiendo confirmacion para continuar.");
+                        string? userResponse = await interaction.RequestUserInputAsync(
+                            "La skill solicita confirmacion. Responde y/s para continuar, n para cancelar, u otro texto para enviar correcciones.");
+                        
                         if (string.IsNullOrWhiteSpace(userResponse))
                         {
                             userResponse = "n";
                         }
 
-                        if (userResponse.Equals("s", StringComparison.OrdinalIgnoreCase) ||
-                            userResponse.Equals("y", StringComparison.OrdinalIgnoreCase))
+                        string normalizedResponse = userResponse.Trim().ToLowerInvariant();
+
+                        if (normalizedResponse == "s" || normalizedResponse == "y" || normalizedResponse == "si" || normalizedResponse == "yes")
                         {
-                            messages.Add(new ChatMessage(ChatRole.Assistant, accumulatedResponse.ToString()));
-                            messages.Add(new ChatMessage(ChatRole.User, "Confirmado. Por favor continua con el siguiente paso."));
-                            Console.WriteLine("[Pipeline] Continuando con la ejecucion...\n");
+                            messages.Add(new ChatMessage(ChatRole.Assistant, fullResponse));
+                            messages.Add(new ChatMessage(ChatRole.User, "Confirmado. Por favor continua con el siguiente paso hasta completar la tarea."));
+                            interaction.Log("[Pipeline] Continuando con la ejecucion...");
+                            continue; // Seguir en el loop while(true) de este agente
+                        }
+                        else if (normalizedResponse == "n" || normalizedResponse == "no" || normalizedResponse == "cancelar")
+                        {
+                            interaction.Log("[Pipeline] Ejecucion cancelada por el usuario.");
+                            return false;
                         }
                         else
                         {
-                            Console.WriteLine("[Pipeline] Ejecucion cancelada por el usuario.");
-                            return false;
+                            messages.Add(new ChatMessage(ChatRole.Assistant, fullResponse));
+                            messages.Add(new ChatMessage(ChatRole.User, userResponse));
+                            interaction.Log("[Pipeline] Enviando correcciones al agente...");
+                            continue; // Seguir en el loop while(true)
                         }
                     }
                     else
                     {
+                        // Agregar la respuesta del asistente al historial para mantener contexto en futuros reintentos/fases si fuera necesario
+                        messages.Add(new ChatMessage(ChatRole.Assistant, fullResponse));
                         return true;
                     }
                 }
@@ -195,12 +284,12 @@ namespace BasicAgent.Pipeline
                     {
                         transientRetryCount++;
                         var delay = RetryPolicy.ComputeExponentialBackoff(transientRetryCount);
-                        Console.WriteLine($"\n[Warning] Error transitorio detectado. Reintento {transientRetryCount}/{MaxStreamingRetries} en {delay.TotalSeconds:F1}s...");
+                        interaction.Log($"[Warning] Error transitorio detectado. Reintento {transientRetryCount}/{MaxStreamingRetries} en {delay.TotalSeconds:F1}s...");
                         await Task.Delay(delay);
                         continue;
                     }
 
-                    Console.WriteLine($"\n[Error en Agente] {ex.Message}");
+                    interaction.Log($"[Error en Agente] {ex.Message}");
                     return false;
                 }
             }
@@ -247,7 +336,7 @@ namespace BasicAgent.Pipeline
             return false;
         }
 
-        private static async Task<string?> WaitForContractFileAsync(string baseDir, int maxRetries = 30, int delayMs = 2000)
+        private static async Task<string?> WaitForContractFileAsync(string baseDir, IPipelineInteraction interaction, int maxRetries = 30, int delayMs = 2000)
         {
             for (int i = 0; i < maxRetries; i++)
             {
@@ -264,11 +353,10 @@ namespace BasicAgent.Pipeline
                 }
 
                 int remaining = (maxRetries - i - 1) * delayMs / 1000;
-                Console.Write($"\r[Pipeline] Esperando escritura de disco... {remaining}s restantes   ");
+                interaction.Log($"[Pipeline] Esperando escritura de disco... {remaining}s restantes");
                 await Task.Delay(delayMs);
             }
 
-            Console.WriteLine();
             return null;
         }
     }

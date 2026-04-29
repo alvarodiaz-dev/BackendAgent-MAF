@@ -5,6 +5,7 @@
 // This is provided for demonstration purposes only.
 
 using System.Diagnostics;
+using System.Linq;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -30,8 +31,12 @@ internal static class SubprocessScriptRunner
         AIFunctionArguments arguments,
         CancellationToken cancellationToken)
     {
+        Console.WriteLine($"[Skills][Script] Running script: {script.Name}");
+        Console.WriteLine($"[Skills][Script] Path: {script.FullPath}");
+
         if (!File.Exists(script.FullPath))
         {
+            Console.WriteLine($"[Skills][Script] Missing script file: {script.FullPath}");
             return $"Error: Script file not found: {script.FullPath}";
         }
 
@@ -87,6 +92,7 @@ internal static class SubprocessScriptRunner
         Process? process = null;
         try
         {
+            Console.WriteLine($"[Skills][Script] Launching {startInfo.FileName} {string.Join(' ', startInfo.ArgumentList.Select(arg => arg.ToString()))}");
             process = Process.Start(startInfo);
             if (process is null)
             {
@@ -111,6 +117,7 @@ internal static class SubprocessScriptRunner
                 output += $"\nScript exited with code {process.ExitCode}";
             }
 
+            Console.WriteLine($"[Skills][Script] Completed {script.Name} with exit code {process.ExitCode}");
             return string.IsNullOrEmpty(output) ? "(no output)" : output.Trim();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -125,6 +132,7 @@ internal static class SubprocessScriptRunner
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"[Skills][Script] Error running {script.Name}: {ex.Message}");
             return $"Error: Failed to execute script '{script.Name}': {ex.Message}";
         }
         finally

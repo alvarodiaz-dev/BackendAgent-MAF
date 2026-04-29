@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Threading.Tasks;
+using BasicAgent.Pipeline;
 
 namespace BasicAgent
 {
@@ -19,6 +20,12 @@ namespace BasicAgent
             [Description("The action or phase that requires confirmation")] string action,
             [Description("Optional detailed description of what will happen if confirmed")] string? details = null)
         {
+            var interaction = PipelineInteractionContext.Current;
+            if (interaction != null)
+            {
+                return RequestViaInteractionAsync(interaction, action, details);
+            }
+
             Console.WriteLine("\n" + new string('═', 70));
             Console.WriteLine("[Skill → User] CONFIRMATION REQUIRED");
             Console.WriteLine(new string('═', 70));
@@ -63,6 +70,12 @@ namespace BasicAgent
         public static Task<string> AskUserYesNo(
             [Description("The question to ask the user")] string question)
         {
+            var interaction = PipelineInteractionContext.Current;
+            if (interaction != null)
+            {
+                return AskViaInteractionAsync(interaction, question);
+            }
+
             Console.WriteLine("\n" + new string('─', 70));
             Console.WriteLine("[Skill → User] REQUIRES YOUR INPUT");
             Console.WriteLine(new string('─', 70));
@@ -101,6 +114,13 @@ namespace BasicAgent
             [Description("The notification message to display")] string message,
             [Description("Type of notification: 'info', 'warning', or 'success'")] string notificationType = "info")
         {
+            var interaction = PipelineInteractionContext.Current;
+            if (interaction != null)
+            {
+                interaction.Log($"[{(notificationType ?? "info").ToUpperInvariant()}] {message}");
+                return Task.FromResult("notified");
+            }
+
             var prefix = (notificationType ?? "info").ToLower() switch
             {
                 "warning" => "⚠",
@@ -110,6 +130,22 @@ namespace BasicAgent
 
             Console.WriteLine($"\n[{prefix} {(notificationType ?? "info").ToUpper()}] {message}\n");
             return Task.FromResult("notified");
+        }
+
+        private static async Task<string> RequestViaInteractionAsync(IPipelineInteraction interaction, string action, string? details)
+        {
+            var prompt = string.IsNullOrWhiteSpace(details)
+                ? $"CONFIRMATION REQUIRED: {action}. Respond y/n."
+                : $"CONFIRMATION REQUIRED: {action}. Details: {details}. Respond y/n.";
+
+            string input = (await interaction.RequestUserInputAsync(prompt)).Trim().ToLowerInvariant();
+            return input == "y" || input == "yes" || input == "s" || input == "si" ? "yes" : "no";
+        }
+
+        private static async Task<string> AskViaInteractionAsync(IPipelineInteraction interaction, string question)
+        {
+            string input = (await interaction.RequestUserInputAsync($"{question} Respond y/n.")).Trim().ToLowerInvariant();
+            return input == "y" || input == "yes" || input == "s" || input == "si" ? "yes" : "no";
         }
     }
 }

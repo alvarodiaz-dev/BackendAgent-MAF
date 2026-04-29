@@ -12,7 +12,7 @@ namespace BasicAgent.Tools
             [Description("The path to the file to write (relative or absolute).")]
             string path,
             [Description("The content to write into the file.")]
-            string content = "")
+            string content)
         {
             string fullPath = ProjectPaths.ResolvePath(path);
             var dir = Path.GetDirectoryName(fullPath);
