@@ -14,6 +14,7 @@ namespace BasicAgent.Infrastructure
         {
             var repoUrl = Environment.GetEnvironmentVariable("SKILLS_REPO_URL");
             var branch = Environment.GetEnvironmentVariable("SKILLS_REPO_BRANCH") ?? "main";
+            var token = EnvironmentVariables.GetGitHubToken();
 
             if (string.IsNullOrWhiteSpace(repoUrl))
             {
@@ -36,6 +37,7 @@ namespace BasicAgent.Infrastructure
                     Console.WriteLine($"[Skills] Inicializando repositorio de skills en {syncRoot}...");
                     
                     await ShellCommandTool.RunShellCommand("git init", syncRoot);
+                    // Añadimos el remote con la URL LIMPIA (sin token)
                     await ShellCommandTool.RunShellCommand($"git remote add origin {repoUrl}", syncRoot);
                     await ShellCommandTool.RunShellCommand("git config core.sparseCheckout true", syncRoot);
                 }
@@ -49,9 +51,20 @@ namespace BasicAgent.Infrastructure
                 }
 
                 Console.WriteLine($"[Skills] Sincronizando rama {branch}...");
-                await ShellCommandTool.RunShellCommand($"git pull origin {branch}", syncRoot);
+                
+                // Usamos la cabecera de autorizacion temporalmente para el pull
+                // Esto no guarda el token en el config y evita popups
+                string realCommand = $"git pull origin {branch}";
+                string logCommand = realCommand;
 
-                // Devolvemos la subcarpeta 'skills' dentro del repo sincronizado
+                if (!string.IsNullOrWhiteSpace(token))
+                {
+                    realCommand = $"git -c \"http.extraheader=Authorization: token {token}\" pull origin {branch}";
+                    logCommand = $"git -c \"http.extraheader=Authorization: token ***\" pull origin {branch}";
+                }
+
+                await ShellCommandTool.RunShellCommand(realCommand, syncRoot, logCommand);
+
                 return Path.Combine(syncRoot, "skills");
             }
             catch (Exception ex)

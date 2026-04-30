@@ -55,6 +55,7 @@ Desktop.ini
 
 #skills
 skills/
+.skills-sync/
 
 #node
 node_modules/
@@ -69,3 +70,9 @@ _bmad-output/
 ibkteam-smp-otp-service/
 
 output/
+
+skills-lock.json
+
+.claude/
+
+.agents/

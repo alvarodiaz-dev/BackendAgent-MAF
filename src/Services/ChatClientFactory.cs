@@ -8,8 +8,51 @@ using Microsoft.Extensions.AI;
 using OllamaSharp;
 using OpenAI;
 
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+
 namespace BasicAgent.Services
 {
+    // Middleware para asegurar que Langfuse vea el input/output de cada llamada a la IA
+    internal class LangfuseEnrichmentClient(IChatClient innerClient) : DelegatingChatClient(innerClient)
+    {
+        public override async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            var activity = Activity.Current;
+            if (activity != null)
+            {
+                // Capturamos el último mensaje del usuario como input de esta observación
+                var lastUserMessage = chatMessages.LastOrDefault(m => m.Role == ChatRole.User)?.Text 
+                                     ?? chatMessages.LastOrDefault()?.Text;
+                
+                activity.SetTag("langfuse.observation.input", lastUserMessage);
+                activity.SetTag("gen_ai.prompt", lastUserMessage);
+            }
+
+            try 
+            {
+                var response = await base.GetResponseAsync(chatMessages, options, cancellationToken);
+
+                if (activity != null)
+                {
+                    var completion = response.ToString();
+                    activity.SetTag("langfuse.observation.output", completion);
+                    activity.SetTag("gen_ai.completion", completion);
+                }
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                activity?.SetTag("otel.status_code", "ERROR");
+                activity?.SetTag("otel.status_description", ex.Message);
+                throw;
+            }
+        }
+    }
+
     internal static class ChatClientFactory
     {
         public static async Task<IChatClient> BuildAsync()
@@ -56,6 +99,12 @@ namespace BasicAgent.Services
 
                 IChatClient chatClient = openAiClient.GetChatClient(modelName).AsIChatClient();
 
+                // Habilitar captura de contenido y enriquecer para Langfuse
+                chatClient = chatClient.AsBuilder()
+                    .UseOpenTelemetry(configure: o => o.EnableSensitiveData = true)
+                    .Use(inner => new LangfuseEnrichmentClient(inner))
+                    .Build();
+
                 Console.WriteLine("[System] Probando conexion con LiteLLM...");
                 await chatClient.GetResponseAsync("test");
                 Console.WriteLine("[System] LiteLLM Gateway conectado.");
@@ -87,6 +136,12 @@ namespace BasicAgent.Services
                 var azureClient = new AzureOpenAIClient(new Uri(endpointUrl), new AzureKeyCredential(apiKey));
                 IChatClient chatClient = azureClient.GetChatClient(deploymentName).AsIChatClient();
 
+                // Habilitar captura de contenido y enriquecer para Langfuse
+                chatClient = chatClient.AsBuilder()
+                    .UseOpenTelemetry(configure: o => o.EnableSensitiveData = true)
+                    .Use(inner => new LangfuseEnrichmentClient(inner))
+                    .Build();
+
                 Console.WriteLine("[System] Probando conexion con la API...");
                 await chatClient.GetResponseAsync("test");
                 Console.WriteLine("[System] Azure OpenAI conectado.");
@@ -102,20 +157,19 @@ namespace BasicAgent.Services
 
         private static IChatClient BuildOllamaClient()
         {
-            Console.WriteLine("[System] Usando Ollama local (fallback)...\n");
+            var modelName = EnvironmentVariables.GetOllamaModel();
+            Console.WriteLine($"[System] Usando Ollama local (modelo: {modelName})...\n");
 
-            var http = new System.Net.Http.HttpClient
+            var ollama = new OllamaApiClient(new Uri("http://localhost:11434"))
             {
-                BaseAddress = new Uri("http://localhost:11434"),
-                Timeout = TimeSpan.FromMinutes(30)
+                SelectedModel = modelName
             };
 
-            var ollama = new OllamaApiClient(http)
-            {
-                SelectedModel = "minimax-m2.7:cloud"
-            };
-
-            return ollama;
+            // Lo convertimos a IChatClient, añadimos telemetría y enriquecimiento
+            return ((IChatClient)ollama).AsBuilder()
+                .UseOpenTelemetry(configure: o => o.EnableSensitiveData = true)
+                .Use(inner => new LangfuseEnrichmentClient(inner))
+                .Build();
         }
     }
 }

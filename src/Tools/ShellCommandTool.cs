@@ -13,11 +13,13 @@ namespace BasicAgent.Tools
         [Description("Execute a shell command locally.")]
         public static async Task<string> RunShellCommand(
             [Description("The command to execute.")] string command,
-            [Description("The working directory for the command.")] string workingDirectory)
+            [Description("The working directory for the command.")] string workingDirectory,
+            [Description("Optional command to display in logs (for hiding secrets).")] string? logCommand = null)
         {
             try
             {
-                Console.WriteLine($"[Tool Executed] Running command: {command} in {workingDirectory}");
+                string displayCommand = logCommand ?? command;
+                Console.WriteLine($"[Tool Executed] Running command: {displayCommand} in {workingDirectory}");
 
                 bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
                 string fileName = isWindows ? "cmd.exe" : "/bin/bash";

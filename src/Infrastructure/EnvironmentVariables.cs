@@ -86,5 +86,20 @@ namespace BasicAgent.Infrastructure
             var model = GetLiteLlmModel();
             return !string.IsNullOrWhiteSpace(endpoint) && !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(model);
         }
+
+        public static string? GetLangfusePublicKey() =>
+            Environment.GetEnvironmentVariable("LANGFUSE_PUBLIC_KEY");
+
+        public static string? GetLangfuseSecretKey() =>
+            Environment.GetEnvironmentVariable("LANGFUSE_SECRET_KEY");
+
+        public static string GetLangfuseBaseUrl() =>
+            Environment.GetEnvironmentVariable("LANGFUSE_BASE_URL") ?? "http://localhost:3000";
+
+        public static bool IsLangfuseConfigured() =>
+            !string.IsNullOrWhiteSpace(GetLangfusePublicKey()) && !string.IsNullOrWhiteSpace(GetLangfuseSecretKey());
+
+        public static string GetOllamaModel() =>
+            Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? "minimax-m2.7:cloud";
     }
 }
