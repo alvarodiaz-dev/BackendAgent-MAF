@@ -162,6 +162,7 @@ namespace BasicAgent.Pipeline
                     interaction.Log($"[Sub-agent] Turno {turn}...");
                     var accumulatedText = new StringBuilder();
                     bool toolCalled = false;
+                    ToolApprovalRequestContent? pendingApproval = null;
 
                     await foreach (var update in agent.RunStreamingAsync(messages, session))
                     {
@@ -171,9 +172,19 @@ namespace BasicAgent.Pipeline
                             accumulatedText.Append(update.Text);
                         }
 
-                        if (update.Contents != null && update.Contents.Any(c => c is FunctionCallContent))
+                        if (update.Contents != null)
                         {
-                            toolCalled = true;
+                            if (update.Contents.Any(c => c is FunctionCallContent))
+                            {
+                                toolCalled = true;
+                            }
+                            
+                            // Detección del patrón nativo de HITL (ApprovalRequiredAIFunction)
+                            var approvalReq = update.Contents.FirstOrDefault(c => c is ToolApprovalRequestContent) as ToolApprovalRequestContent;
+                            if (approvalReq != null)
+                            {
+                                pendingApproval = approvalReq;
+                            }
                         }
                     }
 
@@ -185,34 +196,29 @@ namespace BasicAgent.Pipeline
                         messages.Add(new ChatMessage(ChatRole.Assistant, response));
                     }
 
+                    // Manejo nativo de Human-in-the-loop (HITL)
+                    if (pendingApproval != null)
+                    {
+                        var toolName = (pendingApproval.ToolCall as FunctionCallContent)?.Name ?? "unknown tool";
+                        interaction.Log($"[Sub-agent] El framework requiere aprobacion para la herramienta: {toolName}");
+                        string? userIn = await interaction.RequestUserInputAsync($"Se requiere aprobacion para '{toolName}'. Confirma (y/n):");
+                        if (string.IsNullOrWhiteSpace(userIn)) userIn = "n";
+                        
+                        string normalized = userIn.Trim().ToLowerInvariant();
+                        bool isApproved = normalized == "y" || normalized == "yes" || normalized == "s" || normalized == "si";
+                        
+                        messages.Add(new ChatMessage(ChatRole.User, new List<AIContent> 
+                        { 
+                            new ToolApprovalResponseContent(pendingApproval.RequestId, isApproved, pendingApproval.ToolCall!) 
+                        }));
+                        continue;
+                    }
+
                     // Check completion marker
                     if (response.Contains("[TASK_COMPLETED]", StringComparison.OrdinalIgnoreCase))
                     {
                         interaction.Log("[Sub-agent] Tarea marcada como completada.");
                         return true;
-                    }
-
-                    // Check confirmation request
-                    if (ContainsConfirmationRequest(response))
-                    {
-                        interaction.Log("[Sub-agent] Solicitando confirmación manual...");
-                        string? userIn = await interaction.RequestUserInputAsync("Confirma (y/n) o envía correcciones:");
-                        if (string.IsNullOrWhiteSpace(userIn)) userIn = "n";
-                        
-                        string normalized = userIn.Trim().ToLowerInvariant();
-                        if (normalized == "y" || normalized == "yes" || normalized == "s" || normalized == "si")
-                        {
-                            messages.Add(new ChatMessage(ChatRole.User, "Confirmado. Continúa hasta finalizar y recuerda poner [TASK_COMPLETED] al terminar."));
-                        }
-                        else if (normalized == "n" || normalized == "no")
-                        {
-                            return false;
-                        }
-                        else
-                        {
-                            messages.Add(new ChatMessage(ChatRole.User, userIn));
-                        }
-                        continue;
                     }
 
                     // Si no hubo herramientas ni marcador, el agente se detuvo. Forzamos continuación.
@@ -236,8 +242,7 @@ namespace BasicAgent.Pipeline
                         }
                         else
                         {
-                            // Error de lógica o herramienta, notificar al agente para que corrija
-                            messages.Add(new ChatMessage(ChatRole.User, $"Hubo un error en la ejecución: {ex.Message}. Por favor, revisa tus herramientas y parámetros e intenta de nuevo. Asegúrate de incluir todos los campos obligatorios."));
+                            messages.Add(new ChatMessage(ChatRole.User, $"Hubo un error en la ejecución: {ex.Message}. Por favor, revisa tus herramientas e intenta de nuevo."));
                         }
 
                         await Task.Delay(RetryPolicy.ComputeExponentialBackoff(transientRetryCount));
@@ -250,27 +255,6 @@ namespace BasicAgent.Pipeline
 
             interaction.Log("[Error] Límite de turnos alcanzado.");
             return false;
-        }
-
-        private static bool ContainsConfirmationRequest(string response)
-        {
-            if (string.IsNullOrEmpty(response)) return false;
-            
-            // Filtro de falsos positivos
-            if (response.Contains("i have confirmed", StringComparison.OrdinalIgnoreCase) ||
-                response.Contains("already approved", StringComparison.OrdinalIgnoreCase) ||
-                response.Contains("thanks for the confirmation", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            var keywords = new[] { "please confirm", "request confirmation", "approval required", "requires approval", "wait for", "waiting for", "solicito confirmación" };
-            bool hasInterrogation = response.Contains('?');
-            bool hasPlease = response.Contains("please", StringComparison.OrdinalIgnoreCase) || response.Contains("por favor", StringComparison.OrdinalIgnoreCase);
-
-            if (!hasInterrogation && !hasPlease) return false;
-
-            return keywords.Any(k => response.Contains(k, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

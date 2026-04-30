@@ -18,7 +18,7 @@ using System.Globalization;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Resources;
-using Langfuse.OpenTelemetry;
+using OpenTelemetry.Exporter;
 using System.Diagnostics;
 using System.Threading;
 
@@ -31,6 +31,10 @@ namespace BasicAgent
         private static async Task Main(string[] args)
         {
             Env.Load();
+
+            // Forzar exportación rápida de OpenTelemetry (tiempo real)
+            Environment.SetEnvironmentVariable("OTEL_BSP_SCHEDULE_DELAY", "500");
+            Environment.SetEnvironmentVariable("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "512");
 
             if (args.Any(a => string.Equals(a, "--test-mcp-github", StringComparison.OrdinalIgnoreCase)))
             {
@@ -48,35 +52,71 @@ namespace BasicAgent
             if (EnvironmentVariables.IsLangfuseConfigured())
             {
                 var pubKey = EnvironmentVariables.GetLangfusePublicKey();
+                var secretKey = EnvironmentVariables.GetLangfuseSecretKey();
                 var baseUrl = EnvironmentVariables.GetLangfuseBaseUrl();
-                Console.WriteLine($"[System] Configurando observabilidad con Langfuse...");
+                
+                Console.WriteLine($"[System] Configurando observabilidad con Langfuse (vVia OTLP)...");
                 Console.WriteLine($"[System] Langfuse Host: {baseUrl}");
-                Console.WriteLine($"[System] Langfuse Public Key: {pubKey?[..6]}***");
+
+                // Construir Header de Autorización Basic (Base64)
+                string auth = "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{pubKey}:{secretKey}"));
 
                 builder.Services.AddOpenTelemetry()
                     .WithTracing(tracing =>
                     {
                         tracing
                             .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("BasicAgent"))
-                            .AddAspNetCoreInstrumentation()
-                            .AddHttpClientInstrumentation()
-                            .AddSource("Microsoft.Extensions.AI")
-                            .AddSource("Microsoft.Extensions.AI.*")
-                            .AddSource("BasicAgent.Pipeline")
-                            .AddSource("OpenAI.*")
-                            .AddLangfuseExporter(options =>
+                            .AddAspNetCoreInstrumentation(options =>
                             {
-                                options.PublicKey = EnvironmentVariables.GetLangfusePublicKey();
-                                options.SecretKey = EnvironmentVariables.GetLangfuseSecretKey();
-                                options.BaseUrl = baseUrl;
+                                options.EnrichWithHttpRequest = (activity, httpRequest) =>
+                                {
+                                    // Estos atributos de trace-level los leerá Langfuse desde el span raíz
+                                    activity.SetTag("langfuse.trace.name", $"Pipeline {httpRequest.Path}");
+                                };
+                                options.EnrichWithHttpResponse = (activity, httpResponse) =>
+                                {
+                                    activity.SetTag("http.response.status", httpResponse.StatusCode);
+                                };
+                                options.Filter = (httpContext) =>
+                                {
+                                    var path = httpContext.Request.Path.Value ?? "";
+                                    return !path.StartsWith("/health") &&
+                                        !path.StartsWith("/_") &&
+                                        path != "/";
+                                };
+                            })
+                            .AddHttpClientInstrumentation()
+                            // Sources del SDK de Microsoft
+                            .AddSource("Microsoft.Extensions.AI")
+                            .AddSource("Microsoft.SemanticKernel")
+                            .AddSource("Microsoft.SemanticKernel.*")
+                            // Source del pipeline propio
+                            .AddSource("BasicAgent.Pipeline")
+                            // ── CRÍTICO: registrar el source de las generaciones LLM ──────────
+                            // Sin esto, los spans de LangfuseEnrichmentClient nunca se exportan
+                            .AddSource("BasicAgent.LLMGeneration")
+                            // Source de OpenAI SDK (opcional, para spans adicionales)
+                            .AddSource("OpenAI.*")
+                            .AddOtlpExporter(options =>
+                            {
+                                var endpoint = baseUrl.TrimEnd('/');
+                                if (!endpoint.EndsWith("/api/public/otel"))
+                                    endpoint += "/api/public/otel";
+
+                                options.Endpoint = new Uri($"{endpoint}/v1/traces");
+                                options.Protocol = OtlpExportProtocol.HttpProtobuf;
+                                options.Headers  = $"Authorization={auth},x-langfuse-ingestion-version=4";
+                                //                                        ^── sin espacio después de la coma
                             });
                     });
-                
-                builder.Services.AddHostedService<TelemetryBootstrapService>();
             }
 
             IChatClient chatClient = await ChatClientFactory.BuildAsync();
+            var promptService = new LangfusePromptService();
             var baseTools = BuildBaseTools();
+            
+            builder.Services.AddSingleton(chatClient);
+            builder.Services.AddSingleton(promptService);
             
             var requiredSkills = new[] 
             { 
@@ -174,16 +214,26 @@ namespace BasicAgent
                 Console.WriteLine($"[API] Run accepted: {runContext.RunId}");
                 Console.WriteLine($"[API] Background pipeline starting for session {sessionId}");
 
+                var httpSpan = Activity.Current;
+                if (httpSpan != null)
+                {
+                    httpSpan.SetTag("langfuse.trace.name", $"Pipeline Run");
+                    httpSpan.SetTag("langfuse.trace.input", request.Prompt);
+                    httpSpan.SetTag("langfuse.session.id", sessionId.ToString());
+                    httpSpan.SetTag("langfuse.user.id", sessionId.ToString());
+                    httpSpan.SetTag("gen_ai.system", "BasicAgent");
+                }
+
+                var parentContext = Activity.Current?.Context ?? default;
+
                 _ = Task.Run(async () =>
                 {
-                    using var activity = ActivitySource.StartActivity("PipelineRun");
+                    using var activity = ActivitySource.StartActivity("PipelineRun", ActivityKind.Internal, parentContext: parentContext);
                     if (activity != null)
                     {
-                        activity.SetTag("langfuse.trace.id", sessionId.ToString());
-                        activity.SetTag("langfuse.trace.input", request.Prompt);
+                        activity.SetTag("langfuse.observation.name", "PipelineRun");
                         activity.SetTag("langfuse.observation.input", request.Prompt);
                         activity.SetTag("run.id", runContext.RunId);
-                        activity.SetTag("gen_ai.system", "BasicAgent");
                     }
 
                     try
@@ -194,25 +244,22 @@ namespace BasicAgent
                         if (ok)
                         {
                             state.MarkCompleted();
-                            await persistenceService.InsertMessageAsync(sessionId, "assistant", "Pipeline completed successfully.", runContext.RunId);
+                            var successMsg = "Pipeline completed successfully.";
+                            await persistenceService.InsertMessageAsync(sessionId, "assistant", successMsg, runContext.RunId);
+                            activity?.SetTag("langfuse.observation.output", successMsg);
                         }
                         else if (state.Status == "running")
                         {
                             state.MarkFailed("Pipeline ended before completion.");
-                            await persistenceService.InsertMessageAsync(sessionId, "assistant", "Pipeline ended before completion.", runContext.RunId);
+                            activity?.SetTag("langfuse.trace.output", "Pipeline ended before completion.");
+                            activity?.SetStatus(ActivityStatusCode.Error, "Pipeline ended before completion.");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[Error] Pipeline crash: {ex}");
-                        if (ex.InnerException != null)
-                        {
-                            Console.WriteLine($"[Error] Inner Exception: {ex.InnerException}");
-                        }
-                        
-                        state.AddLog($"Unhandled error: {ex.Message}");
-                        state.MarkFailed(ex.Message);
-                        await persistenceService.InsertMessageAsync(sessionId, "assistant", $"Pipeline failed: {ex.Message}", runContext.RunId);
+                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        activity?.AddException(ex);
+                        activity?.SetTag("langfuse.observation.output", $"Error: {ex.Message}");
                     }
                 });
 
@@ -251,14 +298,12 @@ namespace BasicAgent
             await app.RunAsync();
         }
 
-        private class TelemetryBootstrapService() : IHostedService
-        {
-            public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-            public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-        }
-
         private static List<AITool> BuildBaseTools()
         {
+            var userConfirmationTool = AIFunctionFactory.Create(UserConfirmationTool.RequestUserConfirmation);
+            // Envolvemos la herramienta en ApprovalRequiredAIFunction para activar el HITL nativo
+            var approvalRequiredConfirmation = new ApprovalRequiredAIFunction(userConfirmationTool);
+
             return new List<AITool>
             {
                 AIFunctionFactory.Create(FileSystemTools.WriteFile),
@@ -266,9 +311,10 @@ namespace BasicAgent
                 AIFunctionFactory.Create(FileSystemTools.ReadFile),
                 AIFunctionFactory.Create(FileSystemTools.GetDirectoryStructure),
                 AIFunctionFactory.Create(ShellCommandTool.RunShellCommand),
-                AIFunctionFactory.Create(UserConfirmationTool.RequestUserConfirmation),
+                approvalRequiredConfirmation,
                 AIFunctionFactory.Create(UserConfirmationTool.AskUserYesNo),
-                AIFunctionFactory.Create(UserConfirmationTool.NotifyUser)
+                AIFunctionFactory.Create(UserConfirmationTool.NotifyUser),
+                AIFunctionFactory.Create(() => "completed", "MarkTaskAsCompleted", "Mark the assigned task or phase as fully completed.")
             };
         }
     }
